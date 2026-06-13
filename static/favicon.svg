@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Music note">
-  <path fill="#19140f" d="M39 8h8v32a11 11 0 1 1-8-10V8Z"/>
-  <path fill="#19140f" d="M39 8h18v8H39z"/>
-  <circle cx="24" cy="45" r="11" fill="#19140f"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Concert spotlight">
+  <rect width="64" height="64" rx="14" fill="#19140f"/>
+  <path fill="#f1b51c" d="M20 9h24l-7 33H27L20 9Z"/>
+  <ellipse cx="32" cy="49" rx="22" ry="7" fill="#fffaf0"/>
+  <circle cx="32" cy="39" r="8" fill="#d82231"/>
 </svg>
