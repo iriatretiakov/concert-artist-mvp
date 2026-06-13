@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Concert Artist Extractor</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace" aria-labelledby="title">
+        <div class="title-row">
+          <div>
+            <p class="eyebrow">Gemini Flash MVP</p>
+            <h1 id="title">Concert Artist Extractor</h1>
+          </div>
+          <div class="status-pill" id="statusPill">Ready</div>
+        </div>
+
+        <div class="tool-grid">
+          <form class="panel input-panel" id="analyzeForm">
+            <div class="segmented" role="group" aria-label="Input type">
+              <button type="button" class="segment active" data-mode="upload">Upload</button>
+              <button type="button" class="segment" data-mode="url">URL</button>
+            </div>
+
+            <div class="source active" data-source="upload">
+              <label class="drop-zone" for="imageInput" id="dropZone">
+                <input id="imageInput" name="image" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" />
+                <span class="drop-title">Select Image</span>
+                <span class="drop-meta" id="fileMeta">JPEG, PNG, WebP, HEIC, HEIF</span>
+              </label>
+            </div>
+
+            <div class="source" data-source="url">
+              <label class="field-label" for="imageUrl">Image URL</label>
+              <input id="imageUrl" name="image_url" type="url" placeholder="https://example.com/poster.jpg" autocomplete="off" />
+            </div>
+
+            <div class="preview-frame">
+              <img id="previewImage" alt="" />
+              <div class="preview-empty" id="previewEmpty">No image</div>
+            </div>
+
+            <button class="primary-button" id="analyzeButton" type="submit">Analyze</button>
+          </form>
+
+          <section class="panel result-panel" aria-labelledby="resultTitle">
+            <div class="result-heading">
+              <h2 id="resultTitle">Review</h2>
+              <button class="secondary-button" id="copyButton" type="button" disabled>Copy JSON</button>
+            </div>
+
+            <div class="spotify-auth-row">
+              <div>
+                <h3>Spotify Account</h3>
+                <span id="spotifyAuthLabel">Checking connection</span>
+              </div>
+              <div class="auth-actions">
+                <button class="secondary-button" id="spotifyLoginButton" type="button">Sign In</button>
+              </div>
+            </div>
+
+            <div class="result-groups">
+              <div>
+                <h3>Analyzed</h3>
+                <div class="chips" id="artistChips"></div>
+              </div>
+              <div>
+                <h3>Unclear</h3>
+                <div class="chips muted" id="unclearChips"></div>
+              </div>
+            </div>
+
+            <div class="event-block">
+              <div class="review-title">
+                <h3>Event</h3>
+                <span id="eventMeta">Waiting for analysis</span>
+              </div>
+              <div class="event-grid">
+                <label>
+                  <span>Event Name</span>
+                  <input id="eventNameInput" type="text" placeholder="Event or tour name" />
+                </label>
+                <label>
+                  <span>Event Date</span>
+                  <input id="eventDatesInput" type="text" placeholder="2025-10-31" />
+                </label>
+              </div>
+              <label class="playlist-name-field">
+                <span>Playlist Name</span>
+                <input id="playlistNameInput" type="text" placeholder="Concert artists playlist" />
+              </label>
+            </div>
+
+            <div class="review-block">
+              <div class="review-title">
+                <h3>Spotify Checked</h3>
+                <span id="reviewMeta">Waiting for analysis</span>
+              </div>
+              <div class="spotify-list" id="spotifyList"></div>
+            </div>
+
+            <div class="playlist-actions">
+              <button class="primary-button" id="createPlaylistButton" type="button" disabled>Create Playlist</button>
+              <div id="playlistStatus">Approve Spotify-verified artists to create a playlist.</div>
+            </div>
+
+            <pre class="json-box" id="jsonBox">{
+  "artists": [],
+  "approved_artists": [],
+  "needs_verification": false
+}</pre>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <dialog class="confirm-dialog" id="confirmDialog">
+      <form method="dialog">
+        <h2>Confirm Playlist</h2>
+        <div id="confirmDetails" class="confirm-details"></div>
+        <div class="dialog-actions">
+          <button class="secondary-button" value="cancel" type="submit">Cancel</button>
+          <button class="primary-button" id="confirmCreateButton" value="confirm" type="button">Create Playlist</button>
+        </div>
+      </form>
+    </dialog>
+    <script src="/static/app.js?v=playlist-6"></script>
+  </body>
+</html>
