@@ -611,6 +611,7 @@ def create_spotify_user_session(token_payload):
         "access_token": access_token,
         "refresh_token": token_payload.get("refresh_token"),
         "expires_at": time.time() + int(token_payload.get("expires_in", 3600)),
+        "scope": token_payload.get("scope") or SPOTIFY_AUTH_SCOPE,
     }
     return session_id
 
@@ -660,6 +661,7 @@ def refresh_spotify_user_session(session_id):
 
     session["access_token"] = payload.get("access_token", session["access_token"])
     session["refresh_token"] = payload.get("refresh_token", session["refresh_token"])
+    session["scope"] = payload.get("scope", session.get("scope", ""))
     session["expires_at"] = time.time() + int(payload.get("expires_in", 3600))
     return session
 
@@ -738,6 +740,7 @@ def spotify_auth_status(session_id):
         "authenticated": False,
         "login_url": "/api/spotify/login",
         "redirect_uri": spotify_redirect_uri(),
+        "cover_scope_granted": False,
     }
 
     if not session_id or session_id not in SPOTIFY_USER_SESSIONS:
@@ -754,6 +757,7 @@ def spotify_auth_status(session_id):
         "authenticated": True,
         "login_url": "/api/spotify/login",
         "redirect_uri": spotify_redirect_uri(),
+        "cover_scope_granted": "ugc-image-upload" in set((SPOTIFY_USER_SESSIONS.get(session_id, {}).get("scope") or "").split()),
         "user": {
             "id": profile.get("id"),
             "display_name": profile.get("display_name") or profile.get("id"),
@@ -872,6 +876,7 @@ def create_playlist_from_payload(payload, session_id):
     event_dates = unique_strings(payload.get("event_dates"))
     playlist_name = clean_playlist_text(payload.get("playlist_name"), build_playlist_name(event_name, event_dates))
     playlist_cover_image = validate_playlist_cover_image(payload.get("playlist_cover_image"))
+    playlist_cover_source = optional_string(payload.get("playlist_cover_source"))
 
     tracks_by_artist = []
     track_uris = []
@@ -953,6 +958,7 @@ def create_playlist_from_payload(payload, session_id):
             "public": spotify_playlist_public(),
             "cover_uploaded": cover_uploaded,
             "cover_error": cover_error,
+            "cover_source": playlist_cover_source if playlist_cover_image else None,
         },
         "event_name": event_name,
         "event_dates": event_dates,

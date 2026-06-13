@@ -469,11 +469,67 @@ button:disabled {
 }
 
 .event-grid span,
-.playlist-name-field span {
+.playlist-name-field span,
+.cover-tooltip > span {
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 900;
   text-transform: uppercase;
+}
+
+.cover-tooltip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
+}
+
+.cover-trigger {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff6e4;
+  color: var(--ink);
+  cursor: help;
+  font-weight: 900;
+}
+
+.cover-tooltip-panel {
+  width: min(240px, calc(100vw - 56px));
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 4;
+  display: none;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffdf7;
+  box-shadow: var(--shadow);
+}
+
+.cover-tooltip:hover .cover-tooltip-panel,
+.cover-tooltip:focus-within .cover-tooltip-panel {
+  display: grid;
+}
+
+.cover-tooltip-panel img {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #15110e;
+}
+
+.cover-tooltip-panel span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.35;
 }
 
 .review-title {

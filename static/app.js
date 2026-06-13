@@ -20,6 +20,8 @@ const manualArtistInput = document.querySelector("#manualArtistInput");
 const manualArtistSearchButton = document.querySelector("#manualArtistSearchButton");
 const manualArtistStatus = document.querySelector("#manualArtistStatus");
 const manualArtistResultsEl = document.querySelector("#manualArtistResults");
+const coverTooltipImage = document.querySelector("#coverTooltipImage");
+const coverTooltipText = document.querySelector("#coverTooltipText");
 const spotifyAuthLabel = document.querySelector("#spotifyAuthLabel");
 const spotifyLoginButton = document.querySelector("#spotifyLoginButton");
 const createPlaylistButton = document.querySelector("#createPlaylistButton");
@@ -32,7 +34,9 @@ const dropZone = document.querySelector("#dropZone");
 let activeMode = "upload";
 let playlistNameTouched = false;
 let manualArtistMatches = [];
-let spotifyAuth = { authenticated: false, login_url: "/api/spotify/login", redirect_uri: "", user: null };
+let latestCoverPreviewDataUrl = "";
+let fallbackCoverDataUrl = "";
+let spotifyAuth = { authenticated: false, login_url: "/api/spotify/login", redirect_uri: "", cover_scope_granted: false, user: null };
 let currentPlaylistResult = null;
 let currentTracksByArtist = [];
 let currentAnalysis = {
@@ -65,11 +69,68 @@ function setStatus(text, state = "idle") {
   statusPill.dataset.state = state;
 }
 
+function generateFallbackCover() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 512;
+  const context = canvas.getContext("2d");
+  if (!context) return "";
+
+  const gradient = context.createLinearGradient(0, 0, 512, 512);
+  gradient.addColorStop(0, "#16110e");
+  gradient.addColorStop(0.42, "#d82231");
+  gradient.addColorStop(1, "#f1b51c");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 512, 512);
+
+  context.globalAlpha = 0.42;
+  for (let index = 0; index < 12; index += 1) {
+    const x = 24 + index * 42;
+    context.fillStyle = index % 2 ? "#fffaf0" : "#15110e";
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x + 72, 0);
+    context.lineTo(280 + Math.sin(index) * 120, 330);
+    context.closePath();
+    context.fill();
+  }
+
+  context.globalAlpha = 1;
+  context.fillStyle = "rgba(21, 17, 14, 0.72)";
+  context.fillRect(0, 318, 512, 194);
+  context.fillStyle = "#fffaf0";
+  for (let index = 0; index < 34; index += 1) {
+    const x = index * 16 - 8;
+    const height = 34 + ((index * 17) % 42);
+    context.beginPath();
+    context.arc(x + 8, 340 + ((index * 9) % 18), 7 + (index % 4), 0, Math.PI * 2);
+    context.fill();
+    context.fillRect(x + 3, 350, 10, height);
+  }
+
+  context.fillStyle = "#15110e";
+  context.fillRect(136, 190, 240, 72);
+  context.fillStyle = "#fffaf0";
+  context.fillRect(152, 204, 208, 44);
+  context.fillStyle = "#d82231";
+  context.fillRect(172, 218, 168, 16);
+
+  return canvas.toDataURL("image/jpeg", 0.82);
+}
+
+function updateCoverTooltip(src = "", text = "") {
+  const fallback = fallbackCoverDataUrl || "";
+  coverTooltipImage.src = src || fallback;
+  coverTooltipText.textContent = text || "A generated concert image is shown until a poster cover is ready.";
+}
+
 function updatePreview() {
   previewImage.removeAttribute("src");
   previewImage.removeAttribute("crossorigin");
   previewImage.classList.remove("visible");
   previewEmpty.classList.remove("hidden");
+  latestCoverPreviewDataUrl = "";
+  updateCoverTooltip("", "Upload a poster to use it as the playlist cover.");
 
   if (activeMode === "upload") {
     const file = imageInput.files?.[0];
@@ -82,6 +143,7 @@ function updatePreview() {
     previewImage.src = URL.createObjectURL(file);
     previewImage.classList.add("visible");
     previewEmpty.classList.add("hidden");
+    updateCoverTooltip(previewImage.src, "This poster will be converted into the Spotify playlist cover.");
     return;
   }
 
@@ -90,6 +152,7 @@ function updatePreview() {
     previewImage.src = url;
     previewImage.classList.add("visible");
     previewEmpty.classList.add("hidden");
+    updateCoverTooltip(url, "This URL poster will be used when the browser can read it safely.");
   }
 }
 
@@ -503,7 +566,8 @@ function renderFinalJson() {
 function updatePlaylistControls() {
   const hasApproved = currentFinalResult.approved_artists.length > 0;
   const hasPending = currentFinalResult.pending_review.length > 0;
-  createPlaylistButton.disabled = !spotifyAuth.authenticated || !hasApproved || hasPending || Boolean(currentPlaylistResult);
+  const needsCoverReconnect = spotifyAuth.authenticated && spotifyAuth.cover_scope_granted === false;
+  createPlaylistButton.disabled = !spotifyAuth.authenticated || !hasApproved || hasPending || Boolean(currentPlaylistResult) || needsCoverReconnect;
 
   if (currentPlaylistResult?.url) {
     playlistStatus.replaceChildren();
@@ -514,7 +578,8 @@ function updatePlaylistControls() {
     link.textContent = "Open playlist on Spotify";
     playlistStatus.append(link);
     if (currentPlaylistResult.cover_uploaded) {
-      playlistStatus.append(" · Poster cover added.");
+      const sourceText = currentPlaylistResult.cover_source === "uploaded_poster" ? "uploaded poster" : "poster";
+      playlistStatus.append(` · Cover added from ${sourceText}.`);
     } else if (currentPlaylistResult.cover_error) {
       playlistStatus.append(` · Cover skipped: ${currentPlaylistResult.cover_error}`);
     }
@@ -523,6 +588,11 @@ function updatePlaylistControls() {
 
   if (!spotifyAuth.authenticated) {
     playlistStatus.textContent = "Sign in with Spotify before creating a playlist.";
+    return;
+  }
+
+  if (needsCoverReconnect) {
+    playlistStatus.textContent = "Reconnect Spotify to allow poster covers.";
     return;
   }
 
@@ -540,7 +610,101 @@ function updatePlaylistControls() {
 }
 
 function hasPosterPreview() {
-  return previewImage.classList.contains("visible") && previewImage.complete && previewImage.naturalWidth > 0;
+  if (activeMode === "upload") return Boolean(imageInput.files?.[0]);
+  return Boolean(imageUrl.value.trim());
+}
+
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Could not read the uploaded poster image."));
+    };
+    image.src = objectUrl;
+  });
+}
+
+function loadImageFromUrl(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Could not read the image URL for a playlist cover."));
+    image.src = url;
+  });
+}
+
+function drawCoverCanvas(image, size) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+
+  const imageWidth = image.naturalWidth || image.width;
+  const imageHeight = image.naturalHeight || image.height;
+  if (!imageWidth || !imageHeight) return null;
+
+  context.fillStyle = "#15110e";
+  context.fillRect(0, 0, size, size);
+
+  const backgroundScale = Math.max(size / imageWidth, size / imageHeight);
+  const backgroundWidth = Math.round(imageWidth * backgroundScale);
+  const backgroundHeight = Math.round(imageHeight * backgroundScale);
+  const backgroundX = Math.round((size - backgroundWidth) / 2);
+  const backgroundY = Math.round((size - backgroundHeight) / 2);
+  context.save();
+  context.filter = "blur(18px)";
+  context.drawImage(image, backgroundX - 18, backgroundY - 18, backgroundWidth + 36, backgroundHeight + 36);
+  context.restore();
+
+  context.fillStyle = "rgba(21, 17, 14, 0.35)";
+  context.fillRect(0, 0, size, size);
+
+  const padding = Math.round(size * 0.07);
+  const foregroundScale = Math.min((size - padding * 2) / imageWidth, (size - padding * 2) / imageHeight);
+  const foregroundWidth = Math.round(imageWidth * foregroundScale);
+  const foregroundHeight = Math.round(imageHeight * foregroundScale);
+  const foregroundX = Math.round((size - foregroundWidth) / 2);
+  const foregroundY = Math.round((size - foregroundHeight) / 2);
+
+  context.shadowColor = "rgba(0, 0, 0, 0.36)";
+  context.shadowBlur = Math.round(size * 0.035);
+  context.shadowOffsetY = Math.round(size * 0.018);
+  context.drawImage(image, foregroundX, foregroundY, foregroundWidth, foregroundHeight);
+  context.shadowColor = "transparent";
+
+  return canvas;
+}
+
+function encodeCoverCanvas(canvas) {
+  const sizes = [640, 512, 384, 320];
+  const qualities = [0.86, 0.76, 0.66, 0.56, 0.46];
+
+  for (const size of sizes) {
+    const scaled = document.createElement("canvas");
+    scaled.width = size;
+    scaled.height = size;
+    const context = scaled.getContext("2d");
+    if (!context) continue;
+    context.drawImage(canvas, 0, 0, size, size);
+
+    for (const quality of qualities) {
+      const dataUrl = scaled.toDataURL("image/jpeg", quality);
+      const base64 = dataUrl.split(",", 2)[1] || "";
+      if (base64 && base64.length <= 256 * 1024) {
+        return { base64, dataUrl };
+      }
+    }
+  }
+
+  return null;
 }
 
 async function buildPlaylistCoverImage() {
@@ -548,39 +712,25 @@ async function buildPlaylistCoverImage() {
     return null;
   }
 
-  const sizes = [640, 512, 384, 320];
-  const qualities = [0.86, 0.76, 0.66, 0.56, 0.46];
-  const canvas = document.createElement("canvas");
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-
   try {
-    for (const size of sizes) {
-      canvas.width = size;
-      canvas.height = size;
-      context.fillStyle = "#15110e";
-      context.fillRect(0, 0, size, size);
+    const sourceImage = activeMode === "upload"
+      ? await loadImageFromFile(imageInput.files[0])
+      : await loadImageFromUrl(imageUrl.value.trim());
+    const canvas = drawCoverCanvas(sourceImage, 768);
+    const encoded = canvas ? encodeCoverCanvas(canvas) : null;
+    if (!encoded) return null;
 
-      const scale = Math.min(size / previewImage.naturalWidth, size / previewImage.naturalHeight);
-      const width = Math.round(previewImage.naturalWidth * scale);
-      const height = Math.round(previewImage.naturalHeight * scale);
-      const x = Math.round((size - width) / 2);
-      const y = Math.round((size - height) / 2);
-      context.drawImage(previewImage, x, y, width, height);
-
-      for (const quality of qualities) {
-        const dataUrl = canvas.toDataURL("image/jpeg", quality);
-        const base64 = dataUrl.split(",", 2)[1] || "";
-        if (base64 && base64.length <= 256 * 1024) {
-          return base64;
-        }
-      }
-    }
+    latestCoverPreviewDataUrl = encoded.dataUrl;
+    updateCoverTooltip(encoded.dataUrl, "This exact poster cover will be sent to Spotify.");
+    return {
+      image: encoded.base64,
+      source: activeMode === "upload" ? "uploaded_poster" : "url_poster",
+    };
   } catch (error) {
     console.warn("Could not prepare playlist cover", error);
+    updateCoverTooltip("", "Poster cover could not be prepared; the generated concert image is shown as a fallback.");
+    return null;
   }
-
-  return null;
 }
 
 async function refreshSpotifyAuthStatus() {
@@ -590,12 +740,17 @@ async function refreshSpotifyAuthStatus() {
     if (!response.ok) throw new Error(data.error || "Could not check Spotify login.");
 
     spotifyAuth = data;
-    spotifyAuthLabel.textContent = data.authenticated
-      ? `Connected as ${data.user?.display_name || data.user?.id || "Spotify user"}`
-      : "Not connected";
+    if (data.authenticated) {
+      const userName = data.user?.display_name || data.user?.id || "Spotify user";
+      spotifyAuthLabel.textContent = data.cover_scope_granted
+        ? `Connected as ${userName}`
+        : `Connected as ${userName}; reconnect for poster covers`;
+    } else {
+      spotifyAuthLabel.textContent = "Not connected";
+    }
     spotifyLoginButton.textContent = data.authenticated ? "Reconnect" : "Sign In";
   } catch (error) {
-    spotifyAuth = { authenticated: false, login_url: "/api/spotify/login", redirect_uri: "", user: null };
+    spotifyAuth = { authenticated: false, login_url: "/api/spotify/login", redirect_uri: "", cover_scope_granted: false, user: null };
     spotifyAuthLabel.textContent = error.message;
   }
 
@@ -677,7 +832,11 @@ function openConfirmDialog() {
   }
 
   const artistNames = currentFinalResult.approved_artists.map((artist) => artist.name).join(", ");
-  const coverText = hasPosterPreview() ? "Poster image" : "Not available";
+  const coverText = activeMode === "upload" && imageInput.files?.[0]
+    ? "Uploaded poster image"
+    : imageUrl.value.trim()
+      ? "URL poster image, if browser-readable"
+      : "Not available";
   confirmDetails.innerHTML = `
     <dl>
       <dt>Playlist</dt>
@@ -719,7 +878,7 @@ async function createPlaylist() {
   setStatus("Creating playlist", "busy");
 
   try {
-    const playlistCoverImage = await buildPlaylistCoverImage();
+    const playlistCover = await buildPlaylistCoverImage();
     const response = await fetch("/api/spotify/create-playlist", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -729,7 +888,8 @@ async function createPlaylist() {
         event_dates: currentFinalResult.event_dates,
         playlist_name: currentFinalResult.playlist_name,
         approved_artists: currentFinalResult.approved_artists,
-        playlist_cover_image: playlistCoverImage,
+        playlist_cover_image: playlistCover?.image || null,
+        playlist_cover_source: playlistCover?.source || null,
       }),
     });
     const data = await response.json();
@@ -839,6 +999,8 @@ dropZone.addEventListener("drop", (event) => {
   updatePreview();
 });
 
+fallbackCoverDataUrl = generateFallbackCover();
+updateCoverTooltip();
 renderResult(currentAnalysis);
 setStatus("Ready");
 refreshSpotifyAuthStatus();

@@ -91,6 +91,14 @@
                 <span>Playlist Name</span>
                 <input id="playlistNameInput" type="text" placeholder="Concert artists playlist" />
               </label>
+              <div class="cover-tooltip">
+                <span>Playlist Cover</span>
+                <button class="cover-trigger" id="coverTooltipButton" type="button" aria-describedby="coverTooltipPanel">Preview</button>
+                <div class="cover-tooltip-panel" id="coverTooltipPanel" role="tooltip">
+                  <img id="coverTooltipImage" alt="" />
+                  <span id="coverTooltipText">Upload a poster to use it as the playlist cover.</span>
+                </div>
+              </div>
             </div>
 
             <div class="manual-artist-block">
@@ -138,6 +146,6 @@
         </div>
       </form>
     </dialog>
-    <script src="/static/app.js?v=playlist-7"></script>
+    <script src="/static/app.js?v=playlist-8"></script>
   </body>
 </html>
