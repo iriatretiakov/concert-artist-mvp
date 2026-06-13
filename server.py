@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import base64
+import binascii
 import ipaddress
 import json
 import mimetypes
@@ -36,7 +37,7 @@ SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search"
 SPOTIFY_TOKEN_CACHE = {"access_token": None, "expires_at": 0}
 SPOTIFY_OAUTH_STATES = {}
 SPOTIFY_USER_SESSIONS = {}
-SPOTIFY_AUTH_SCOPE = "playlist-modify-private playlist-modify-public user-read-private"
+SPOTIFY_AUTH_SCOPE = "playlist-modify-private playlist-modify-public user-read-private ugc-image-upload"
 SPOTIFY_STATE_TTL_SECONDS = 10 * 60
 
 SUPPORTED_IMAGE_TYPES = {
@@ -500,6 +501,18 @@ def search_spotify_artist(name):
     }
 
 
+def search_spotify_artist_candidates(name, limit=8):
+    name = optional_string(name)
+    if not name:
+        raise AppError("Enter an artist name to search.")
+
+    limit = max(1, min(int(limit or 8), 10))
+    query = urlencode({"q": name, "type": "artist", "limit": str(limit)})
+    payload = spotify_get_json(f"{SPOTIFY_SEARCH_URL}?{query}")
+    items = (payload.get("artists") or {}).get("items") or []
+    return [spotify_artist_summary(item) for item in items]
+
+
 def spotify_check_artists(artists, unclear):
     checks = []
     seen = set()
@@ -690,6 +703,36 @@ def spotify_user_request_json(session_id, method, path, payload=None, retry=True
         raise AppError("Spotify user request timed out.", HTTPStatus.BAD_GATEWAY) from exc
 
 
+def spotify_user_request_raw(session_id, method, path, body, content_type, retry=True):
+    session = get_spotify_user_session(session_id)
+    data = body.encode("ascii") if isinstance(body, str) else body
+    headers = {
+        "Authorization": f"Bearer {session['access_token']}",
+        "Content-Type": content_type,
+    }
+
+    url = path if path.startswith("http") else f"{SPOTIFY_API_BASE}{path}"
+    request = Request(url, data=data, headers=headers, method=method)
+
+    try:
+        with urlopen(request, timeout=25) as response:
+            response.read()
+            return {"status": response.status}
+    except HTTPError as exc:
+        if exc.code == 401 and retry:
+            refresh_spotify_user_session(session_id)
+            return spotify_user_request_raw(session_id, method, path, body, content_type, retry=False)
+        if exc.code == 429:
+            retry_after = exc.headers.get("Retry-After", "unknown")
+            raise AppError(f"Spotify rate limit hit. Retry after {retry_after} seconds.", HTTPStatus.BAD_GATEWAY) from exc
+        details = exc.read().decode("utf-8", errors="replace")
+        raise AppError(f"Spotify user request failed with HTTP {exc.code}: {details}", HTTPStatus.BAD_GATEWAY) from exc
+    except URLError as exc:
+        raise AppError(f"Spotify user request failed: {exc.reason}", HTTPStatus.BAD_GATEWAY) from exc
+    except TimeoutError as exc:
+        raise AppError("Spotify user request timed out.", HTTPStatus.BAD_GATEWAY) from exc
+
+
 def spotify_auth_status(session_id):
     base = {
         "authenticated": False,
@@ -790,6 +833,33 @@ def build_playlist_name(event_name, event_dates):
     return "Concert artist discoveries"
 
 
+def validate_playlist_cover_image(value):
+    if not value:
+        return None
+    if not isinstance(value, str):
+        raise AppError("Playlist cover image must be base64 JPEG data.")
+
+    value = value.strip()
+    if value.startswith("data:image/jpeg;base64,"):
+        value = value.split(",", 1)[1]
+    value = "".join(value.split())
+
+    if not value:
+        return None
+    if len(value.encode("ascii", errors="ignore")) > 256 * 1024:
+        raise AppError("Playlist cover image is too large. Spotify allows base64 JPEG payloads up to 256 KB.")
+
+    try:
+        image_bytes = base64.b64decode(value, validate=True)
+    except binascii.Error as exc:
+        raise AppError("Playlist cover image must be valid base64 JPEG data.") from exc
+
+    if not image_bytes.startswith(b"\xff\xd8"):
+        raise AppError("Playlist cover image must be a JPEG.")
+
+    return value
+
+
 def create_playlist_from_payload(payload, session_id):
     if not payload.get("confirmed"):
         raise AppError("Confirm playlist creation before sending the request.")
@@ -801,6 +871,7 @@ def create_playlist_from_payload(payload, session_id):
     event_name = optional_string(payload.get("event_name"))
     event_dates = unique_strings(payload.get("event_dates"))
     playlist_name = clean_playlist_text(payload.get("playlist_name"), build_playlist_name(event_name, event_dates))
+    playlist_cover_image = validate_playlist_cover_image(payload.get("playlist_cover_image"))
 
     tracks_by_artist = []
     track_uris = []
@@ -857,6 +928,21 @@ def create_playlist_from_payload(payload, session_id):
             payload={"uris": track_uris[index : index + 100]},
         )
 
+    cover_uploaded = False
+    cover_error = None
+    if playlist_cover_image:
+        try:
+            spotify_user_request_raw(
+                session_id,
+                "PUT",
+                f"/playlists/{quote(playlist_id, safe='')}/images",
+                playlist_cover_image,
+                "image/jpeg",
+            )
+            cover_uploaded = True
+        except AppError as exc:
+            cover_error = str(exc)
+
     return {
         "playlist": {
             "id": playlist_id,
@@ -865,6 +951,8 @@ def create_playlist_from_payload(payload, session_id):
             "uri": playlist.get("uri"),
             "track_count": len(track_uris),
             "public": spotify_playlist_public(),
+            "cover_uploaded": cover_uploaded,
+            "cover_error": cover_error,
         },
         "event_name": event_name,
         "event_dates": event_dates,
@@ -916,6 +1004,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_redirect(build_spotify_login_url())
             except AppError as exc:
                 self.send_html(f"<h1>Spotify Login Error</h1><p>{str(exc)}</p>", status=exc.status)
+            return
+
+        if parsed.path == "/api/spotify/search-artist":
+            self.handle_spotify_artist_search(parsed)
             return
 
         if parsed.path == "/callback":
@@ -1003,6 +1095,25 @@ class Handler(BaseHTTPRequestHandler):
             if exc.status == HTTPStatus.UNAUTHORIZED:
                 response["login_url"] = "/api/spotify/login"
             self.send_json(response, status=exc.status)
+        except Exception:
+            traceback.print_exc()
+            self.send_json({"error": "Unexpected server error."}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def handle_spotify_artist_search(self, parsed):
+        try:
+            query = parse_qs(parsed.query)
+            name = (query.get("q") or [""])[0]
+            limit = int((query.get("limit") or ["8"])[0])
+            self.send_json(
+                {
+                    "query": name,
+                    "artists": search_spotify_artist_candidates(name, limit=limit),
+                }
+            )
+        except ValueError:
+            self.send_json({"error": "Search limit must be a number."}, status=HTTPStatus.BAD_REQUEST)
+        except AppError as exc:
+            self.send_json({"error": str(exc)}, status=exc.status)
         except Exception:
             traceback.print_exc()
             self.send_json({"error": "Unexpected server error."}, status=HTTPStatus.INTERNAL_SERVER_ERROR)

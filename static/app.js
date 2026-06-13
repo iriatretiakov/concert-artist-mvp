@@ -16,6 +16,10 @@ const eventMeta = document.querySelector("#eventMeta");
 const eventNameInput = document.querySelector("#eventNameInput");
 const eventDatesInput = document.querySelector("#eventDatesInput");
 const playlistNameInput = document.querySelector("#playlistNameInput");
+const manualArtistInput = document.querySelector("#manualArtistInput");
+const manualArtistSearchButton = document.querySelector("#manualArtistSearchButton");
+const manualArtistStatus = document.querySelector("#manualArtistStatus");
+const manualArtistResultsEl = document.querySelector("#manualArtistResults");
 const spotifyAuthLabel = document.querySelector("#spotifyAuthLabel");
 const spotifyLoginButton = document.querySelector("#spotifyLoginButton");
 const createPlaylistButton = document.querySelector("#createPlaylistButton");
@@ -27,6 +31,7 @@ const dropZone = document.querySelector("#dropZone");
 
 let activeMode = "upload";
 let playlistNameTouched = false;
+let manualArtistMatches = [];
 let spotifyAuth = { authenticated: false, login_url: "/api/spotify/login", redirect_uri: "", user: null };
 let currentPlaylistResult = null;
 let currentTracksByArtist = [];
@@ -62,6 +67,7 @@ function setStatus(text, state = "idle") {
 
 function updatePreview() {
   previewImage.removeAttribute("src");
+  previewImage.removeAttribute("crossorigin");
   previewImage.classList.remove("visible");
   previewEmpty.classList.remove("hidden");
 
@@ -129,6 +135,37 @@ function normalizeCheck(check) {
   };
 }
 
+function normalizeSpotifyArtist(artist) {
+  const images = Array.isArray(artist.images) ? artist.images : [];
+  return {
+    id: artist.id || "",
+    name: artist.name || "",
+    url: artist.url || artist.spotify_url || artist.external_url || artist.external_urls?.spotify || "",
+    uri: artist.uri || "",
+    genres: Array.isArray(artist.genres) ? artist.genres : [],
+    popularity: typeof artist.popularity === "number" ? artist.popularity : null,
+    followers: typeof artist.followers === "number" ? artist.followers : artist.followers?.total || null,
+    image_url: artist.image_url || images[0]?.url || null,
+  };
+}
+
+function comparableName(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replaceAll("&", "and")
+    .replace(/[^\p{Letter}\p{Number}]/gu, "");
+}
+
+function artistAlreadyChecked(artist) {
+  const spotifyId = artist.id;
+  const nameKey = comparableName(artist.name);
+  return currentAnalysis.spotify_checked.some((check) => {
+    if (spotifyId && check.spotify?.id === spotifyId) return true;
+    return nameKey && comparableName(check.spotify?.name || check.input_name) === nameKey;
+  });
+}
+
 function suggestPlaylistName(eventName, eventDates) {
   const dateText = eventDates.slice(0, 2).join(", ");
   if (eventName && dateText) return `${eventName} - ${dateText}`;
@@ -140,6 +177,7 @@ function suggestPlaylistName(eventName, eventDates) {
 function renderResult(result) {
   currentPlaylistResult = null;
   currentTracksByArtist = [];
+  manualArtistMatches = [];
   currentAnalysis = {
     artists: Array.isArray(result.artists) ? result.artists : [],
     unclear: Array.isArray(result.unclear) ? result.unclear : [],
@@ -160,10 +198,12 @@ function renderResult(result) {
   eventDatesInput.value = currentAnalysis.event_dates.join(", ");
   playlistNameInput.value = suggestPlaylistName(eventNameInput.value.trim(), splitDates(eventDatesInput.value));
   playlistStatus.textContent = "Approve Spotify-verified artists to create a playlist.";
+  manualArtistStatus.textContent = "Search Spotify";
 
   renderChips(artistChips, currentAnalysis.artists, "None");
   renderChips(unclearChips, currentAnalysis.unclear, "None");
   renderEventSummary();
+  renderManualArtistMatches();
   renderSpotifyReview();
   renderFinalJson();
   copyButton.disabled = !currentAnalysis.spotify_checked.length;
@@ -197,6 +237,60 @@ function renderSpotifyReview() {
 
   currentAnalysis.spotify_checked.forEach((check, index) => {
     spotifyList.append(createSpotifyRow(check, index));
+  });
+}
+
+function renderManualArtistMatches() {
+  manualArtistResultsEl.replaceChildren();
+
+  if (!manualArtistMatches.length) {
+    return;
+  }
+
+  manualArtistMatches.forEach((artist, index) => {
+    const row = document.createElement("div");
+    row.className = "manual-result-row";
+
+    const artwork = document.createElement("div");
+    artwork.className = "artist-artwork";
+    if (artist.image_url) {
+      const image = document.createElement("img");
+      image.src = artist.image_url;
+      image.alt = "";
+      artwork.append(image);
+    } else {
+      artwork.textContent = (artist.name || "?").slice(0, 1).toUpperCase();
+    }
+
+    const details = document.createElement("div");
+    details.className = "artist-details";
+
+    const title = document.createElement("div");
+    title.className = "artist-title";
+    title.textContent = artist.name || "Unknown";
+    details.append(title);
+
+    const meta = document.createElement("div");
+    meta.className = "artist-meta";
+    const metaParts = [];
+    if (typeof artist.popularity === "number") metaParts.push(`popularity ${artist.popularity}`);
+    if (typeof artist.followers === "number") metaParts.push(`${new Intl.NumberFormat().format(artist.followers)} followers`);
+    if (artist.genres?.length) metaParts.push(artist.genres.slice(0, 2).join(", "));
+    meta.textContent = metaParts.join(" · ") || "Spotify artist";
+    details.append(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "artist-actions";
+    const addButton = document.createElement("button");
+    addButton.type = "button";
+    addButton.className = "decision-button approve";
+    addButton.dataset.manualIndex = String(index);
+    addButton.textContent = artistAlreadyChecked(artist) ? "Added" : "Add";
+    addButton.disabled = artistAlreadyChecked(artist);
+    actions.append(addButton);
+
+    row.append(artwork, details, actions);
+    manualArtistResultsEl.append(row);
   });
 }
 
@@ -279,6 +373,62 @@ function createSpotifyRow(check, index) {
   return row;
 }
 
+async function searchManualArtist() {
+  const query = manualArtistInput.value.trim();
+  manualArtistMatches = [];
+  renderManualArtistMatches();
+
+  if (!query) {
+    manualArtistStatus.textContent = "Enter an artist name";
+    return;
+  }
+
+  manualArtistSearchButton.disabled = true;
+  manualArtistStatus.textContent = "Searching";
+
+  try {
+    const response = await fetch(`/api/spotify/search-artist?q=${encodeURIComponent(query)}&limit=8`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Artist search failed.");
+
+    manualArtistMatches = Array.isArray(data.artists) ? data.artists.map(normalizeSpotifyArtist).filter((artist) => artist.id && artist.name) : [];
+    manualArtistStatus.textContent = manualArtistMatches.length
+      ? `${manualArtistMatches.length} Spotify results`
+      : "No Spotify results";
+    renderManualArtistMatches();
+  } catch (error) {
+    manualArtistStatus.textContent = error.message;
+  } finally {
+    manualArtistSearchButton.disabled = false;
+  }
+}
+
+function addManualArtist(index) {
+  const artist = manualArtistMatches[index];
+  if (!artist || artistAlreadyChecked(artist)) {
+    renderManualArtistMatches();
+    return;
+  }
+
+  const check = {
+    input_name: manualArtistInput.value.trim() || artist.name,
+    source: "manual",
+    status: "verified",
+    spotify: artist,
+    alternatives: [],
+  };
+
+  currentAnalysis.spotify_checked.push(check);
+  currentAnalysis.spotify_verified_artists.push(artist);
+  decisions.set(String(currentAnalysis.spotify_checked.length - 1), "approved");
+  currentPlaylistResult = null;
+  currentTracksByArtist = [];
+  manualArtistStatus.textContent = `${artist.name} added`;
+  renderManualArtistMatches();
+  renderSpotifyReview();
+  renderFinalJson();
+}
+
 function buildFinalResult() {
   const eventName = eventNameInput?.value.trim() || "";
   const eventDates = eventDatesInput ? splitDates(eventDatesInput.value) : [];
@@ -333,6 +483,7 @@ function buildFinalResult() {
 function renderFinalJson() {
   currentFinalResult = buildFinalResult();
   jsonBox.textContent = JSON.stringify(currentFinalResult, null, 2);
+  copyButton.disabled = !currentAnalysis.spotify_checked.length;
   updatePlaylistControls();
 
   const pendingCount = currentFinalResult.pending_review.length;
@@ -355,7 +506,18 @@ function updatePlaylistControls() {
   createPlaylistButton.disabled = !spotifyAuth.authenticated || !hasApproved || hasPending || Boolean(currentPlaylistResult);
 
   if (currentPlaylistResult?.url) {
-    playlistStatus.innerHTML = `<a href="${currentPlaylistResult.url}" target="_blank" rel="noreferrer">Open playlist on Spotify</a>`;
+    playlistStatus.replaceChildren();
+    const link = document.createElement("a");
+    link.href = currentPlaylistResult.url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = "Open playlist on Spotify";
+    playlistStatus.append(link);
+    if (currentPlaylistResult.cover_uploaded) {
+      playlistStatus.append(" · Poster cover added.");
+    } else if (currentPlaylistResult.cover_error) {
+      playlistStatus.append(` · Cover skipped: ${currentPlaylistResult.cover_error}`);
+    }
     return;
   }
 
@@ -375,6 +537,50 @@ function updatePlaylistControls() {
   }
 
   playlistStatus.textContent = "Ready to create a playlist with up to 5 popular tracks per approved artist.";
+}
+
+function hasPosterPreview() {
+  return previewImage.classList.contains("visible") && previewImage.complete && previewImage.naturalWidth > 0;
+}
+
+async function buildPlaylistCoverImage() {
+  if (!hasPosterPreview()) {
+    return null;
+  }
+
+  const sizes = [640, 512, 384, 320];
+  const qualities = [0.86, 0.76, 0.66, 0.56, 0.46];
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+
+  try {
+    for (const size of sizes) {
+      canvas.width = size;
+      canvas.height = size;
+      context.fillStyle = "#15110e";
+      context.fillRect(0, 0, size, size);
+
+      const scale = Math.min(size / previewImage.naturalWidth, size / previewImage.naturalHeight);
+      const width = Math.round(previewImage.naturalWidth * scale);
+      const height = Math.round(previewImage.naturalHeight * scale);
+      const x = Math.round((size - width) / 2);
+      const y = Math.round((size - height) / 2);
+      context.drawImage(previewImage, x, y, width, height);
+
+      for (const quality of qualities) {
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        const base64 = dataUrl.split(",", 2)[1] || "";
+        if (base64 && base64.length <= 256 * 1024) {
+          return base64;
+        }
+      }
+    }
+  } catch (error) {
+    console.warn("Could not prepare playlist cover", error);
+  }
+
+  return null;
 }
 
 async function refreshSpotifyAuthStatus() {
@@ -471,6 +677,7 @@ function openConfirmDialog() {
   }
 
   const artistNames = currentFinalResult.approved_artists.map((artist) => artist.name).join(", ");
+  const coverText = hasPosterPreview() ? "Poster image" : "Not available";
   confirmDetails.innerHTML = `
     <dl>
       <dt>Playlist</dt>
@@ -483,6 +690,8 @@ function openConfirmDialog() {
       <dd>${escapeHtml(artistNames)}</dd>
       <dt>Tracks</dt>
       <dd>Up to 5 popular Spotify tracks per approved artist</dd>
+      <dt>Cover</dt>
+      <dd>${escapeHtml(coverText)}</dd>
     </dl>
   `;
 
@@ -510,6 +719,7 @@ async function createPlaylist() {
   setStatus("Creating playlist", "busy");
 
   try {
+    const playlistCoverImage = await buildPlaylistCoverImage();
     const response = await fetch("/api/spotify/create-playlist", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -519,6 +729,7 @@ async function createPlaylist() {
         event_dates: currentFinalResult.event_dates,
         playlist_name: currentFinalResult.playlist_name,
         approved_artists: currentFinalResult.approved_artists,
+        playlist_cover_image: playlistCoverImage,
       }),
     });
     const data = await response.json();
@@ -560,6 +771,20 @@ spotifyList.addEventListener("click", (event) => {
   currentTracksByArtist = [];
   renderSpotifyReview();
   renderFinalJson();
+});
+
+manualArtistSearchButton.addEventListener("click", searchManualArtist);
+
+manualArtistInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  searchManualArtist();
+});
+
+manualArtistResultsEl.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-manual-index]");
+  if (!button) return;
+  addManualArtist(Number(button.dataset.manualIndex));
 });
 
 spotifyLoginButton.addEventListener("click", () => {
