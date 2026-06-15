@@ -4,6 +4,8 @@ const imageUrl = document.querySelector("#imageUrl");
 const previewImage = document.querySelector("#previewImage");
 const previewEmpty = document.querySelector("#previewEmpty");
 const fileMeta = document.querySelector("#fileMeta");
+const pasteImageButton = document.querySelector("#pasteImageButton");
+const pasteHint = document.querySelector("#pasteHint");
 const statusPill = document.querySelector("#statusPill");
 const analyzeButton = document.querySelector("#analyzeButton");
 const copyButton = document.querySelector("#copyButton");
@@ -160,6 +162,62 @@ function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function extensionForMimeType(mimeType) {
+  const normalized = (mimeType || "").toLowerCase();
+  if (normalized.includes("jpeg")) return "jpg";
+  if (normalized.includes("png")) return "png";
+  if (normalized.includes("webp")) return "webp";
+  if (normalized.includes("heic")) return "heic";
+  if (normalized.includes("heif")) return "heif";
+  return "png";
+}
+
+function isSupportedImageFile(file) {
+  if (!file) return false;
+  if ((file.type || "").startsWith("image/")) return true;
+  return /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name || "");
+}
+
+function normalizeClipboardFile(file) {
+  if (file.name) return file;
+  const extension = extensionForMimeType(file.type);
+  return new File([file], `clipboard-poster.${extension}`, {
+    type: file.type || "image/png",
+    lastModified: Date.now(),
+  });
+}
+
+function setUploadedImageFile(file, sourceLabel = "Clipboard") {
+  if (!isSupportedImageFile(file)) {
+    throw new Error("Clipboard does not contain a supported image.");
+  }
+
+  const normalizedFile = normalizeClipboardFile(file);
+  const transfer = new DataTransfer();
+  transfer.items.add(normalizedFile);
+  imageInput.files = transfer.files;
+  imageUrl.value = "";
+
+  if (activeMode !== "upload") {
+    setMode("upload");
+  } else {
+    updatePreview();
+  }
+
+  setStatus(`${sourceLabel} image ready`, "ok");
+  pasteHint.textContent = `${normalizedFile.name} · ${formatBytes(normalizedFile.size)}`;
+}
+
+function imageFileFromDataTransfer(items) {
+  for (const item of Array.from(items || [])) {
+    if (item.kind === "file" && (item.type || "").startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) return file;
+    }
+  }
+  return null;
 }
 
 function splitDates(value) {
@@ -973,6 +1031,48 @@ imageInput.addEventListener("change", updatePreview);
 imageUrl.addEventListener("input", updatePreview);
 form.addEventListener("submit", analyze);
 
+pasteImageButton.addEventListener("click", async () => {
+  if (!navigator.clipboard?.read) {
+    setStatus("Paste unavailable", "warn");
+    pasteHint.textContent = "Use the browser paste command.";
+    return;
+  }
+
+  pasteImageButton.disabled = true;
+  setStatus("Reading clipboard", "busy");
+
+  try {
+    const clipboardItems = await navigator.clipboard.read();
+    for (const clipboardItem of clipboardItems) {
+      const imageType = clipboardItem.types.find((type) => type.startsWith("image/"));
+      if (!imageType) continue;
+      const blob = await clipboardItem.getType(imageType);
+      setUploadedImageFile(blob, "Clipboard");
+      return;
+    }
+
+    setStatus("No image in clipboard", "warn");
+    pasteHint.textContent = "Copy an image, then paste again.";
+  } catch (error) {
+    setStatus("Paste blocked", "warn");
+    pasteHint.textContent = "Use the browser paste command.";
+  } finally {
+    pasteImageButton.disabled = false;
+  }
+});
+
+document.addEventListener("paste", (event) => {
+  const file = imageFileFromDataTransfer(event.clipboardData?.items);
+  if (!file) return;
+
+  event.preventDefault();
+  try {
+    setUploadedImageFile(file, "Pasted");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
+
 copyButton.addEventListener("click", async () => {
   await navigator.clipboard.writeText(JSON.stringify(currentFinalResult, null, 2));
   setStatus("Copied", "ok");
@@ -993,10 +1093,11 @@ dropZone.addEventListener("drop", (event) => {
   const file = event.dataTransfer.files?.[0];
   if (!file) return;
 
-  const transfer = new DataTransfer();
-  transfer.items.add(file);
-  imageInput.files = transfer.files;
-  updatePreview();
+  try {
+    setUploadedImageFile(file, "Dropped");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
 });
 
 fallbackCoverDataUrl = generateFallbackCover();
